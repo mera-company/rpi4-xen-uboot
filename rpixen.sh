@@ -1,35 +1,66 @@
-#!/bin/bash -eux
+#!/bin/bash 
 
 # SPDX-License-Identifier: MIT
 
 # Copyright (c) 2019, DornerWorks, Ltd.
 # Author: Stewart Hildebrand
+#
+# Copyright (c) 2020, MERA
+# Author: Leonid Lazarev
+
+PROXY_CFG="";
+DNS_SERVER="8.8.8.8";
+
+ARCH_CFG="arm64";
+IMAGE_SIZE=2048;
+
+# build type guest or host
+BUILD_TYPE="host"; 
+
+helpFunction()
+{
+   echo ""
+   echo "Usage: $0 [-p proxy] [-d dns server] [-s image size]"
+   echo "    -p http proxy to be used in format site.domain.com"
+   echo "    -d dns server"
+   echo "    -s image size in MB. Default 2048"
+   echo "    -h help"
+   exit 1 # Exit script after printing help
+}
+
+optstring="p:d:s:h"
+while getopts $optstring opt
+do
+   case $opt in
+      p ) PROXY_CFG="$OPTARG" ;;
+      d ) DNS_SERVER="$OPTARG" ;;
+      s ) IMAGE_SIZE="$OPTARG" ;; 
+      h | *) helpFunction ;; # Print helpFunction in case parameter is non-existent
+   esac
+done
+
 
 WRKDIR=$(pwd)/
 SCRIPTDIR=$(cd $(dirname $0) && pwd)/
 
-USERNAME=dornerworks
-PASSWORD=dornerworks
+USERNAME=pi
+PASSWORD=123
+
 SALT=dw
 HASHED_PASSWORD=$(perl -e "print crypt(\"${PASSWORD}\",\"${SALT}\");")
 HOSTNAME=ubuntu
+VARIANT=dom0
 
-BUILD_ARCH=${1:-arm64}
+BUILD_ARCH=$ARCH_CFG
 
-sudo apt install device-tree-compiler tftpd-hpa flex bison qemu-utils kpartx git curl qemu-user-static binfmt-support parted bc libncurses5-dev libssl-dev pkg-config python acpica-tools
+sudo apt install device-tree-compiler tftpd-hpa flex bison qemu-utils kpartx git curl qemu-user-static binfmt-support parted bc libncurses5-dev libssl-dev pkg-config python acpica-tools u-boot-tools
 
 source ${SCRIPTDIR}toolchain-aarch64-linux-gnu.sh
-source ${SCRIPTDIR}toolchain-arm-linux-gnueabihf.sh
 
 DTBFILE=bcm2711-rpi-4-b.dtb
-if [ "${BUILD_ARCH}" == "arm64" ]; then
-    DTBXENO=pi4-64-xen
-else
-    DTBXENO=pi4-32-xen
-fi
-XEN_ADDR=0x00200000
 
-# Clone sources
+
+# Clone firmaware source
 if [ ! -d firmware ]; then
     git clone --depth 1 https://github.com/raspberrypi/firmware.git
 fi
@@ -38,6 +69,7 @@ if [ ! -d xen ]; then
     git clone git://xenbits.xen.org/xen.git
     cd xen
     git checkout RELEASE-4.13.0
+    git am ${SCRIPTDIR}patches/xen/0001-XEN-on-RPi4-1GB-lmitation-workaround-XEN-tries-to-al.patch
     cd ${WRKDIR}
 fi
 
@@ -48,6 +80,20 @@ if [ ! -d linux ]; then
     cd ${WRKDIR}
 fi
 
+# Clone u-boot and build
+if [ ! -d u-boot ]; then
+    git clone https://github.com/u-boot/u-boot.git
+fi
+
+#compile uboot for rpi4
+if [ ! -s ${WRKDIR}u-boot/u-boot.bin ]; then
+    cd u-boot
+    if [ "${BUILD_ARCH}" == "arm64" ]; then
+        make CROSS_COMPILE=aarch64-linux-gnu- rpi_arm64_defconfig
+        make CROSS_COMPILE=aarch64-linux-gnu- -j $(nproc) 
+    fi
+    cd ${WRKDIR} 
+fi
 
 # Build xen
 if [ ! -s ${WRKDIR}xen/xen/xen ]; then
@@ -69,21 +115,9 @@ if [ "${BUILD_ARCH}" == "arm64" ]; then
         make O=.build-arm64 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2711_defconfig xen.config
     fi
     make O=.build-arm64 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j $(nproc) broadcom/${DTBFILE}
-    make O=.build-arm64 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j $(nproc) overlays/${DTBXENO}.dtbo
     if [ ! -s ${WRKDIR}linux/.build-arm64/arch/arm64/boot/Image ]; then
         echo "Building kernel. This takes a while. To monitor progress, open a new terminal and use \"tail -f buildoutput.log\""
         make O=.build-arm64 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j $(nproc) > ${WRKDIR}buildoutput.log 2> ${WRKDIR}buildoutput2.log
-    fi
-elif [ "${BUILD_ARCH}" == "armhf" ]; then
-    if [ ! -s ${WRKDIR}linux/.build-arm32/.config ]; then
-        # utilize kernel/configs/xen.config fragment
-        make O=.build-arm32 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- bcm2711_defconfig xen.config
-    fi
-    make O=.build-arm32 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j $(nproc) ${DTBFILE}
-    make O=.build-arm32 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j $(nproc) overlays/${DTBXENO}.dtbo
-    if [ ! -s ${WRKDIR}linux/.build-arm32/arch/arm/boot/zImage ]; then
-        echo "Building kernel. This takes a while. To monitor progress, open a new terminal and use \"tail -f buildoutput.log\""
-        make O=.build-arm32 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j $(nproc) zImage modules dtbs > ${WRKDIR}buildoutput.log 2> ${WRKDIR}buildoutput2.log
     fi
 fi
 cd ${WRKDIR}
@@ -95,28 +129,32 @@ fi
 
 cp ${WRKDIR}firmware/boot/fixup4*.dat ${WRKDIR}firmware/boot/start4*.elf bootfiles/
 
-mkdir -p bootfiles/overlays
 if [ "${BUILD_ARCH}" == "arm64" ]; then
     cp ${WRKDIR}linux/.build-arm64/arch/arm64/boot/dts/broadcom/${DTBFILE} bootfiles/
-    cp ${WRKDIR}linux/.build-arm64/arch/arm64/boot/dts/overlays/${DTBXENO}.dtbo bootfiles/overlays
-elif [ "${BUILD_ARCH}" == "armhf" ]; then
-    cp ${WRKDIR}linux/.build-arm32/arch/arm/boot/dts/${DTBFILE} bootfiles/
-    cp ${WRKDIR}linux/.build-arm32/arch/arm/boot/dts/overlays/${DTBXENO}.dtbo bootfiles/overlays
 fi
 
+#prepare u-boot script
+cd boot_scripts
+mkimage -A arm -T script -C none -n "RPI4 Boot script" -d "boot.cmd" boot.scr
+cd ${WRKDIR}
+
+#add the command line parameters for dom0 kernel loading
 cat > bootfiles/cmdline.txt <<EOF
 console=hvc0 clk_ignore_unused root=/dev/mmcblk0p2 rootwait
 EOF
 
 # https://www.raspberrypi.org/documentation/configuration/config-txt/boot.md
-# the boot image must be named kernel8.img for the fsbl to load it in 64-bit mode
-# Xen must be placed on a 2M boundary
+# We could use the kernel option to overwrite the default kernel name
+# Load u-boot.bin instead of kernel
+#
+# Due to limitation for Arm64 mode:  https://github.com/raspberrypi/linux/issues/3093
+# USB works only if the total_mem is 3G or less 
+# 
 cat > bootfiles/config.txt <<EOF
-kernel=kernel8.img
+kernel=u-boot.bin
 arm_64bit=1
-kernel_address=${XEN_ADDR}
-dtoverlay=${DTBXENO}
-total_mem=1024
+device_tree=${DTBFILE}
+total_mem=3072
 enable_gic=1
 
 #disable_overscan=1
@@ -134,37 +172,37 @@ enable_uart=1
 init_uart_baud=115200
 EOF
 
-# 18MiB worth of zeros
-dd if=/dev/zero of=bootfiles/kernel8.img bs=1024 count=18432
+# Copy u-boot script to boot
+cp ${WRKDIR}boot_scripts/boot.scr bootfiles/
 
-# Assuming xen is less than 2MiB in size
-dd if=${WRKDIR}xen/xen/xen of=bootfiles/kernel8.img bs=1024 conv=notrunc
+# Copy u-boot binary to boot
+cp ${WRKDIR}u-boot/u-boot.bin bootfiles/
 
+# Copy xen to the boot partition
+cp ${WRKDIR}xen/xen/xen bootfiles/
+
+# Copy kernel to boot partion
 if [ "${BUILD_ARCH}" == "arm64" ]; then
-    # Assuming linux is less than 15.5MiB in size
-    # Image is offset by 2.5MiB from the beginning of the file
-    dd if=${WRKDIR}linux/.build-arm64/arch/arm64/boot/Image of=bootfiles/kernel8.img bs=1024 seek=2560 conv=notrunc
-elif [ "${BUILD_ARCH}" == "armhf" ]; then
-    # Assuming linux is less than 16MiB in size
-    # Image is offset by 2MiB from the beginning of the file
-    dd if=${WRKDIR}linux/.build-arm32/arch/arm/boot/zImage of=bootfiles/kernel8.img bs=1024 seek=2048 conv=notrunc
+    cp ${WRKDIR}linux/.build-arm64/arch/arm64/boot/Image bootfiles/
 fi
 
+#copy rpi bootfiles to boot partion
 if [ -d /media/${USER}/boot/ ]; then
-    cp -r bootfiles/* /media/${USER}/boot/
-    sync
+    cp bootfiles/* /media/${USER}/boot/
+    
 fi
 
-ROOTFS=ubuntu-base-18.04.3-base-${BUILD_ARCH}-prepped.tar.gz
-if [ ! -s ${ROOTFS} ]; then
-    ./ubuntu-base-prep.sh ${BUILD_ARCH}
-fi
+sync
 
-
-MNTRAMDISK=/mnt/ramdisk/
-MNTROOTFS=/mnt/rpi-arm64-rootfs/
+MNTRAMDISK=/mnt/dom0_ramdisk/
+MNTROOTFS=/mnt/dom0_rpi-arm64-rootfs/
 MNTBOOT=${MNTROOTFS}boot/
 IMGFILE=${MNTRAMDISK}rpixen.img
+
+ROOTFS=${VARIANT}-ubuntu-base-18.04.3-base-${BUILD_ARCH}-prepped.tar.gz
+if [ ! -s ${ROOTFS} ]; then
+    ./ubuntu-base-prep.sh ${ROOTFS} ${MNTRAMDISK} ${BUILD_ARCH}  ${DNS_SERVER} ${PROXY_CFG} 
+fi
 
 unmountstuff () {
   sudo umount ${MNTROOTFS}proc || true
@@ -207,7 +245,7 @@ trap finish EXIT
 sudo mkdir -p ${MNTRAMDISK}
 sudo mount -t tmpfs -o size=3g tmpfs ${MNTRAMDISK}
 
-qemu-img create ${IMGFILE} 2048M
+qemu-img create ${IMGFILE} ${IMAGE_SIZE}M
 /sbin/parted ${IMGFILE} --script -- mklabel msdos
 /sbin/parted ${IMGFILE} --script -- mkpart primary fat32 2048s 264191s
 /sbin/parted ${IMGFILE} --script -- mkpart primary ext4 264192s -1s
@@ -234,8 +272,6 @@ sudo cp -r bootfiles/* ${MNTBOOT}
 cd ${WRKDIR}linux
 if [ "${BUILD_ARCH}" == "arm64" ]; then
     sudo --preserve-env PATH=${PATH} make O=.build-arm64 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=${MNTROOTFS} modules_install > ${WRKDIR}modules_install.log
-elif [ "${BUILD_ARCH}" == "armhf" ]; then
-    sudo --preserve-env PATH=${PATH} make O=.build-arm32 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=${MNTROOTFS} modules_install > ${WRKDIR}modules_install.log
 fi
 cd ${WRKDIR}
 
@@ -245,9 +281,6 @@ cd ${WRKDIR}
 if [ "${BUILD_ARCH}" == "arm64" ]; then
     CROSS_PREFIX=aarch64-linux-gnu
     XEN_ARCH=arm64
-elif [ "${BUILD_ARCH}" == "armhf" ]; then
-    CROSS_PREFIX=arm-linux-gnueabihf
-    XEN_ARCH=arm32
 fi
 
 # Change the shared library symlinks to relative instead of absolute so they play nice with cross-compiling

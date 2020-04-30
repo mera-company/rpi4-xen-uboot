@@ -1,0 +1,28 @@
+From 2701d65271686dff0cb39ab7da1e821f5dede61e Mon Sep 17 00:00:00 2001
+From: Leonid Lazarev <leonid.lazarev@mera.com>
+Date: Tue, 21 Apr 2020 17:28:16 +0300
+Subject: [PATCH] XEN on RPi4 1GB lmitation workaround:  XEN tries to allocated
+ the memopry for dom0  within first 4GB, but for some reason raspberry pi only
+ allows to load kernel  from 1st GB. Push XEN to allocate first bank for dom0
+ from 1st GB
+
+---
+ xen/arch/arm/domain_build.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/xen/arch/arm/domain_build.c b/xen/arch/arm/domain_build.c
+index dd9c3b73ba..8501a8c8aa 100644
+--- a/xen/arch/arm/domain_build.c
++++ b/xen/arch/arm/domain_build.c
+@@ -281,7 +281,7 @@ static void __init allocate_memory_11(struct domain *d,
+      */
+     while ( order >= min_low_order )
+     {
+-        for ( bits = order ; bits <= (lowmem ? 32 : PADDR_BITS); bits++ )
++        for ( bits = order ; bits <= (lowmem ? 30 : PADDR_BITS); bits++ )
+         {
+             pg = alloc_domheap_pages(d, order, MEMF_bits(bits));
+             if ( pg != NULL )
+-- 
+2.17.1
+

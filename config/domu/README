@@ -1,0 +1,11 @@
+# How to run virtual machine
+
+  1) mount image
+     $ sudo losetup /dev/loop0 ubuntuDomU.img
+
+  2) run the virtual machine
+     $ sudo xl create domu0.cfg
+
+  3) connect to virtual machine console
+     $ sudo xl console guest0
+
