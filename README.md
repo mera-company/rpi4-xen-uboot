@@ -1,35 +1,104 @@
-# Build Xen for Raspberry Pi 4
+# Xen for Raspberry Pi 4 (64-bit)
+ 
+This provides Xen related builds:
+The build for Xen dom0, based on the 64-bit Linux kernel from the Raspberry Pi tree, and packages a minimal 64-bit Ubuntu 18.04 rootfs for the Raspberry Pi 4.
+     
+This build is based on the https://github.com/dornerworks/xen-rpi4-builder project with the following enhancements:
+       
++ U-boot is now used for Xen and Linux kernel, Ubuntu rootfs loading
++ Added an option for building Linux kernel for domU
++ Removed the limitation with 1Gb for system RAM
 
-This script builds Xen, a 64-bit linux kernel from the Raspberry Pi tree, and packages a minimal 64-bit Ubuntu 18.04 rootfs for the Raspberry Pi 4.
-A recent version of Ubuntu is required to run the build script. An internet connection is required. 8 GB RAM or more is recommended, and 10GB+ free disk space.
+The build for Xen domU is based on the Linux Vanilla kernel 5.5 and minimal Ubuntu 18.04 rootfs
+     
+## Getting Started
 
-Usage:
+In order to build dom0 image run the script
 
     $ ./rpixen.sh
 
-When the script is finished, flash to SD card with (for example):
+In order to build artifacts for domU run the script
+
+    $ ./domubuild.sh
+
+Note that both scripts have additional options: -p proxy, -d dns_server, to setup correct environment 
+   
+### Prerequisites
+
+ - A recent version of Ubuntu is required to run the build script. 
+ - 10GB+ free disk space.
+
+### Installing
+
+In order to burn the artifacts for dom0 to SD card use the following commands:
 
     $ umount /dev/sdX1
     $ umount /dev/sdX2
-    $ sudo dd if=rpixen.img of=/dev/sdX bs=8M
+    $ sudo dd if=rpixen.img of=/dev/sdX bs=8M status=progress
     $ sync
 
-Xen will print messages to the UART.
+Artifacts for domU are located in archive domU.tar.gz.
+This archive contains kernel, rootfs image and config for xl tool. See README inside archive.
 
-This script is a little bit like [https://github.com/mirage/xen-arm-builder](https://github.com/mirage/xen-arm-builder) and [https://github.com/RPi-Distro/pi-gen](https://github.com/RPi-Distro/pi-gen) but for Xen+Ubuntu instead of Raspbian.
-More info about Ubuntu Base is available here [https://wiki.ubuntu.com/Base](https://wiki.ubuntu.com/Base).
+domU artifacts have to be put to /home/pi on the dom0
+
+## Built With
+
+* [Xen] (https://xenproject.org) - the Xen hypervizor
+* [u-boot] (https://www.denx.de/wiki/U-Boot) - the Universal Boot Loader
+* [Ubuntu] (https://ubuntu.com) - Ubuntu OS rootfs
+* [Raspberry Pi] (https://www.raspberrypi.org) - Raspberry Pi 4 adapted kernel and firmware
 
 ## Limitations
 
-* System RAM limited to 1024M
-* HDMI not working
-* Raspberry Pi kernel not suitable for domU
 * aux spi1 and aux spi2 are disabled
+* Wi-Fi/Bluetooth do not work
+* Max 3G of memory is used
 
-## 32-bit Linux
+## Versioning
 
-A 32-bit linux kernel may be built by doing:
+We use [SemVer](http://semver.org/) for versioning. 
 
-    $ ./rpixen.sh armhf
+## Authors
 
-Xen will be built for aarch64 regardless.
+Leonid Lazarev <leonid.lazarev@mera.com>
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us.
+
+## License
+
+This project is licensed under the MIT license. See the [COPYING.MIT](COPYING.MIT) file for details.
+
+## Acknowledgments
+
+### Memory
+
+In order to allow USB working, rpixen.sh script sets total_mem to 3G. See https://github.com/raspberrypi/linux/issues/3093
+for details.
+If the USB support is not required, the total_mem parameter could be removed from config.txt and full memory capacity will be available.
+
+By default, distribution of the memory between domains is following
++ dom0 - 768M  (see boot.cmd for details)
++ domU - 1024M (see domu0.cfg for details)
+
+It is supposed that Raspberry Pi 4 has 4Gb of RAM on board.
+If the another HW is used (1G or 2G), the appropriate modifications are required in the boot.cmd and domu0.cfg.
+
+### I/O
+
+dom0: After running on the target the Xen prints messages to the UART.
+
+### Disk
+
+In order to resize dom0 rootfs partition for several virtual machines, the following action
+has to be done
+
+    $ umount /dev/sdX1
+    $ umount /dev/sdX2
+
+    $ sudo parted /dev/sdX
+    $ >resizepart 2
+    $ sudo e2fsck -f /dev/sdX2	
+    $ sudo resize2fs /dev/sdX2

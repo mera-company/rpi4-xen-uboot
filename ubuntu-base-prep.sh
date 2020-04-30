@@ -5,9 +5,19 @@
 # Copyright (c) 2019, DornerWorks, Ltd.
 # Author: Stewart Hildebrand
 
-WRKDIR=$(pwd)/
-ARCH=${1:-arm64}
+# Copyright (c) 2020 MERA                                                                                               
+# Author: Leonid Lazarev
 
+WRKDIR=$(pwd)/
+
+#name for output
+IMGFILE=$1
+MNTRAMDISK=$2
+ARCH=${3:-arm64}
+DNS_SERVER=${4,-""}
+PROXY=${5:-""}
+
+echo $PROXY
 sudo apt install qemu-user-static
 
 # Download Ubuntu Base file system (https://wiki.ubuntu.com/Base)
@@ -17,10 +27,7 @@ if [ ! -s ${ROOTFS} ]; then
     curl -OLf ${ROOTFSURL}${ROOTFS}
 fi
 
-MNTRAMDISK=/mnt/ramdisk/
 MNTROOTFS=${MNTRAMDISK}qemu-${ARCH}-rootfs/
-
-IMGFILE=ubuntu-base-18.04.3-base-${ARCH}-prepped.tar.gz
 
 if [ -s ${IMGFILE} ]; then
     ROOTFS=${IMGFILE}
@@ -75,11 +82,18 @@ elif [ "${ARCH}" == "armhf" ]; then
 fi
 
 # /etc/resolv.conf is required for internet connectivity in chroot. It will get overwritten by dhcp, so don't get too attached to it.
-sudo chroot ${MNTROOTFS} bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
-sudo chroot ${MNTROOTFS} bash -c 'echo "nameserver 2001:4860:4860::8888" >> /etc/resolv.conf'
+if [ ! -z ${DNS_SERVER} ]; then
+    sudo chroot ${MNTROOTFS} bash -c 'echo "nameserver '$DNS_SERVER'" > /etc/resolv.conf'
+fi
 
 sudo sed -i -e "s/# deb /deb /" ${MNTROOTFS}etc/apt/sources.list
-sudo chroot ${MNTROOTFS} apt-get update
+echo $PROXY
+if [ ! -z ${PROXY} ]; then
+    sudo chroot ${MNTROOTFS} bash -c 'echo "Acquire::http::Proxy \"http://'$PROXY'\""; > etc/apt/apt.conf'
+    sudo cat ${MNTROOTFS}etc/apt/apt.conf
+fi
+
+sudo  chroot  ${MNTROOTFS} apt-get update
 
 # Install the dialog package and others first to squelch some warnings
 sudo chroot ${MNTROOTFS} apt-get -y install dialog apt-utils
